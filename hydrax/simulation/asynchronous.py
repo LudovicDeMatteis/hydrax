@@ -138,7 +138,6 @@ def run_controller(
     ready.set()
 
     start_time = time.time()
-    print("Set ready signal")
     while not finished.is_set():
         curr_time = time.time()
 
@@ -149,15 +148,12 @@ def run_controller(
             qpos=jnp.array(shm_data.qpos[:]),
             qvel=jnp.array(shm_data.qvel[:]),
         )
-        print("Read state from shared memory")
-        print(f"Mocap len : {len(mjx_data.mocap_pos)}")
         if len(mjx_data.mocap_pos) > 0:
             mjx_data = mjx_data.replace(
                 mocap_pos=jnp.array(shm_data.mocap_pos[:]),
                 mocap_quat=jnp.array(shm_data.mocap_quat[:]),
             )
 
-        print("Do a planning step")
         # Do a planning step
         policy_params = jit_optimize(mjx_data, policy_params)
 
@@ -165,7 +161,6 @@ def run_controller(
         shm_data.ctrl[:] = np.array(
             get_action(policy_params, mjx_data.time), dtype=np.float32
         )
-        print("Wrote action to shared memory")
 
         # Print the current planning frequency
         print(
@@ -193,9 +188,7 @@ def run_simulator(
         finished: Shared flag for stopping the simulation.
     """
     # Wait for the controller to be ready
-    print("Simulator waiting for ready signal")
     ready.wait()
-    print("Simulator got ready signal")
 
     with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
         while viewer.is_running():

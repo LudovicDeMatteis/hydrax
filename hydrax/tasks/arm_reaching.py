@@ -41,7 +41,7 @@ class ArmReaching(Task):
         )
         config_reg = jnp.sum(jnp.square(state.qpos - self.qinit))
         control_reg = jnp.sum(jnp.square(control))
-        return 10.0 * target_error + 0.1 * config_reg + 0.001 * control_reg
+        return 10.0 * target_error + 0.1 * config_reg + 0.0 * control_reg
 
     def terminal_cost(self, state: mjx.Data) -> jax.Array:
         """The terminal cost phi(x_T)."""
