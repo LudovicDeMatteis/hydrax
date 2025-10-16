@@ -7,13 +7,13 @@ import jax.numpy as jnp
 from flax.struct import dataclass
 from mujoco import mjx
 
+from hydrax.alg_base import SamplingBasedController, SamplingParams, Trajectory
 from hydrax.risk import AverageCost, RiskStrategy
 from hydrax.task_base import Task
 from hydrax.utils.spline import get_interp_func
 
-
 @dataclass
-class Trajectory:
+class TrajectoryResiduals:
     """Data class for storing rollout data.
 
     Throughout, H denotes the number of control steps (given by the times at
@@ -22,38 +22,23 @@ class Trajectory:
     Attributes:
         controls: Control actions of shape (num_rollouts, H, nu).
         knots: Control spline knots of shape (num_rollouts, num_knots, nu).
-        costs: Costs of shape (num_rollouts, H+1).
+        residuals: Residuals of shape (num_rollouts, H+1, r_dim).
         trace_sites: Positions of trace sites of shape (num_rollouts, H+1, 3).
     """
-
-    controls: jax.Array
+    
     knots: jax.Array
-    costs: jax.Array
+    controls: jax.Array
     trace_sites: jax.Array
+    residuals: jax.Array
 
     def __len__(self):
-        """Return the number of time steps in the trajectory (T)."""
-        return self.costs.shape[-1] - 1
+        """Return the number of time steps in the trajectory"""
+        return self.controls.shape[1]
 
 
-@dataclass
-class SamplingParams:
-    """Parameters for sampling-based control algorithms.
-
-    Attributes:
-        tk: The knot times of the control spline.
-        mean: The mean of the control spline knot distribution, μ = [u₀, ...].
-        rng: The pseudo-random number generator key.
-    """
-
-    tk: jax.Array
-    mean: jax.Array
-    rng: jax.Array
-
-
-class SamplingBasedController(ABC):
-    """An abstract sampling-based MPC algorithm interface."""
-
+class SamplingBasedResidualController(SamplingBasedController):
+    """An abstract class based on SamplingBasedController for using residuals instead of costs."""
+    
     def __init__(
         self,
         task: Task,
@@ -68,9 +53,9 @@ class SamplingBasedController(ABC):
         """Initialize the MPC controller.
 
         Args:
-            task: The task instance defining the dynamics and costs.
+            task: The task instance defining the dynamics and residuals.
             num_randomizations: The number of domain randomizations to use.
-            risk_strategy: How to combining costs from different randomizations.
+            risk_strategy: How to combining residuals from different randomizations.
             seed: The random seed for domain randomization.
             plan_horizon: The time horizon for the rollout in seconds.
             spline_type: The type of spline used for control interpolation.
@@ -178,7 +163,7 @@ class SamplingBasedController(ABC):
         knots: jax.Array,
         rng: jax.Array,
     ) -> Trajectory:
-        """Compute rollout costs, applying domain randomizations.
+        """Compute rollout residuals, applying domain randomizations.
 
         Args:
             state: The initial state x₀.
@@ -187,7 +172,7 @@ class SamplingBasedController(ABC):
             rng: The random number generator key for randomizing initial states.
 
         Returns:
-            A Trajectory object containing the control, costs, and trace sites.
+            A Trajectory object containing the control, residuals, and trace sites.
             Costs are aggregated over domains using the given risk strategy.
         """
         # Set the initial state for each rollout.
@@ -213,14 +198,14 @@ class SamplingBasedController(ABC):
             self.eval_rollouts, in_axes=(self.randomized_axes, 0, None, None)
         )(self.model, states, controls, knots)
 
-        # Combine the costs from different domain randomizations using the
+        # Combine the residuals from different domain randomizations using the
         # specified risk strategy.
-        costs = self.risk_strategy.combine_costs(rollouts.costs)
+        residuals = self.risk_strategy.combine_residuals(rollouts.residuals)
         controls = rollouts.controls[0]  # identical over randomizations
         knots = rollouts.knots[0]  # identical over randomizations
         trace_sites = rollouts.trace_sites[0]  # visualization only, take 1st
         return rollouts.replace(
-            costs=costs, controls=controls, knots=knots, trace_sites=trace_sites
+            residuals=residuals, controls=controls, knots=knots, trace_sites=trace_sites
         )
 
     @partial(jax.vmap, in_axes=(None, None, None, 0, 0))
@@ -231,7 +216,7 @@ class SamplingBasedController(ABC):
         controls: jax.Array,
         knots: jax.Array,
     ) -> Tuple[mjx.Data, Trajectory]:
-        """Rollout control sequences (in parallel) and compute the costs.
+        """Rollout control sequences (in parallel) and compute the residuals.
 
         Args:
             model: The mujoco dynamics model to use.
@@ -241,32 +226,32 @@ class SamplingBasedController(ABC):
 
         Returns:
             The states (stacked) experienced during the rollouts.
-            A Trajectory object containing the control, costs, and trace sites.
+            A Trajectory object containing the control, residuals, and trace sites.
         """
 
         def _scan_fn(
             x: mjx.Data, u: jax.Array
         ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array]]:
-            """Compute the cost and observation, then advance the state."""
+            """Compute the residuals and observation, then advance the state."""
             x = x.replace(ctrl=u)
             x = mjx.step(model, x)  # step model + compute site positions
-            cost = self.dt * self.task.running_cost(x, u)
+            residuals = self.dt * self.task.running_residuals(x, u)
             sites = self.task.get_trace_sites(x)
-            return x, (x, cost, sites)
+            return x, (x, residuals, sites)
 
-        final_state, (states, costs, trace_sites) = jax.lax.scan(
+        final_state, (states, residuals, trace_sites) = jax.lax.scan(
             _scan_fn, state, controls
         )
-        final_cost = self.task.terminal_cost(final_state)
+        final_residuals = self.task.terminal_residuals(final_state)
         final_trace_sites = self.task.get_trace_sites(final_state)
 
-        costs = jnp.append(costs, final_cost)
+        residuals = jnp.append(residuals, final_residuals)
         trace_sites = jnp.append(trace_sites, final_trace_sites[None], axis=0)
 
-        return states, Trajectory(
+        return states, TrajectoryResiduals(
             controls=controls,
             knots=knots,
-            costs=costs,
+            residuals=residuals,
             trace_sites=trace_sites,
         )
 
@@ -293,44 +278,3 @@ class SamplingBasedController(ABC):
         )
         tk = jnp.linspace(0.0, self.plan_horizon, self.num_knots)
         return SamplingParams(tk=tk, mean=mean, rng=rng)
-
-    @abstractmethod
-    def sample_knots(self, params: Any) -> Tuple[jax.Array, Any]:
-        """Sample a set of control spline knots U ~ π(params).
-
-        Args:
-            params: Parameters of the policy distribution (e.g., mean, std).
-
-        Returns:
-            Control spline knots U, size (num rollouts, num_knots).
-            Updated parameters (e.g., with a new PRNG key).
-        """
-
-    @abstractmethod
-    def update_params(self, params: Any, rollouts: Trajectory) -> Any:
-        """Update the policy parameters π(params) using the rollouts.
-
-        Args:
-            params: The current policy parameters.
-            rollouts: The rollouts obtained from the current policy.
-
-        Returns:
-            The updated policy parameters.
-        """
-
-    def get_action(self, params: SamplingParams, t: jax.Array) -> jax.Array:
-        """Get the control action at a given point along the trajectory.
-
-        Args:
-            params: The policy parameters, U ~ π(params).
-            t: The current time at which to query the spline. Spline times are
-                continually evolving as the simulation progresses, so this
-                number should roughly track mj_data.time.
-
-        Returns:
-            The control action u(t).
-        """
-        knots = params.mean[None, ...]  # (1, num_knots, nu)
-        tk = params.tk
-        u = self.interp_func(t, tk, knots)[0]  # (nu,)
-        return u

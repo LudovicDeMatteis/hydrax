@@ -2,6 +2,7 @@ from typing import Literal, Tuple
 
 import jax
 import jax.numpy as jnp
+from mujoco import mjx
 from flax.struct import dataclass
 
 from hydrax.alg_base import SamplingBasedController, SamplingParams, Trajectory
@@ -20,19 +21,16 @@ class RSParams(SamplingParams):
         mean: The mean of the control spline knot distribution, μ = [u₀, ...].
         rng: The pseudo-random number generator key.
     """
-    alpha = 0.5
 
 class RS(SamplingBasedController):
     """
       Randomized Smoothing control.
     """
-
     def __init__(
         self,
         task: Task,
         num_samples: int,
         noise_level: float,
-        temperature: float,
         num_randomizations: int = 1,
         risk_strategy: RiskStrategy = None,
         seed: int = 0,
@@ -47,8 +45,7 @@ class RS(SamplingBasedController):
             task: The dynamics and cost for the system we want to control.
             num_samples: The number of control sequences to sample.
             noise_level: The scale of Gaussian noise to add to sampled controls.
-            temperature: The temperature parameter λ. Higher values take a more
-                         even average over the samples.
+            alpha: The step size for gradient descent.
             num_randomizations: The number of domain randomizations to use.
             risk_strategy: How to combining costs from different randomizations.
                            Defaults to average cost.
@@ -71,7 +68,6 @@ class RS(SamplingBasedController):
         )
         self.noise_level = noise_level
         self.num_samples = num_samples
-        self.temperature = temperature
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
@@ -92,16 +88,37 @@ class RS(SamplingBasedController):
             ),
         )
         controls = params.mean + self.noise_level * noise
-        controls = jnp.concatenate([controls, params.mean[None]], axis=0)
+        controls = jnp.concatenate([params.mean[None], controls], axis=0)
         return controls, params.replace(rng=rng)
 
     def update_params(
-        self, params: RSParams, rollouts: Trajectory
+        self, state: mjx.Data, params: RSParams, rollouts: Trajectory
     ) -> RSParams:
         """Update the mean with the estimated gradient through randomized smoothing"""
+        def _linesearch(params, direction):
+            rng, dr_rng = jax.random.split(params.rng)
+            alphas = jnp.array([2**i for i in range(3, -10, -1)])
+            candidates = params.mean + alphas[:, None, None] * direction
+            rollouts = self.rollout_with_randomizations(
+                state, params.tk, candidates, dr_rng
+            )
+            params = params.replace(rng=rng)
+            costs = jnp.sum(rollouts.costs, axis=1)
+            best = jnp.argmin(costs)
+            alpha = alphas[best]
+            jax.debug.print("Line search selected alpha = {alpha:.3f}", alpha=alpha)
+            return alpha
+
         costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
-        costs_diff = costs[:-1] - costs[-1]
-        noise_knots = (rollouts.knots - params.mean[None])[:-1]
-        estim_grad = jnp.mean((costs_diff[:, None, None] * noise_knots), axis=0) / self.noise_level
-        mean = params.mean - params.alpha * estim_grad
+        costs_diff = costs[1:] - costs[0]
+        noise_knots = (rollouts.knots[1:] - params.mean[None])
+        estim_grad = jnp.einsum("n,nij->ij", costs_diff, noise_knots) / (self.noise_level * self.num_samples)
+        direction = -estim_grad
+        a = _linesearch(params, direction)
+        mean = params.mean + a * direction
+        mean = jnp.clip(
+            mean, self.task.u_min, self.task.u_max
+        )
         return params.replace(mean=mean)
+
+

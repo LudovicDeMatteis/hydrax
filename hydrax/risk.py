@@ -25,6 +25,16 @@ class RiskStrategy(ABC):
         """
         pass
 
+    def combine_residuals(self, residuals: jax.Array) -> jax.Array:
+        """Combine residuals from different randomizations.
+        By default, this just returns the residuals from the first randomization.
+        Args:
+            residuals: rollout residuals, size (randomizations, samples, horizon, dim)
+        Returns:
+            The combined residuals, size (samples, horizon, dim).
+        """
+        return self.combine_costs(residuals)
+
 
 class AverageCost(RiskStrategy):
     """Average cost risk strategy.

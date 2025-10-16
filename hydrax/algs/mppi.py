@@ -2,6 +2,7 @@ from typing import Literal, Tuple
 
 import jax
 import jax.numpy as jnp
+from mujoco import mjx
 from flax.struct import dataclass
 
 from hydrax.alg_base import SamplingBasedController, SamplingParams, Trajectory
@@ -99,11 +100,14 @@ class MPPI(SamplingBasedController):
         return controls, params.replace(rng=rng)
 
     def update_params(
-        self, params: MPPIParams, rollouts: Trajectory
+        self, state: mjx.Data, params: MPPIParams, rollouts: Trajectory
     ) -> MPPIParams:
         """Update the mean with an exponentially weighted average."""
         costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
         # N.B. jax.nn.softmax takes care of details like baseline subtraction.
         weights = jax.nn.softmax(-costs / self.temperature, axis=0)
-        mean = jnp.sum(weights[:, None, None] * rollouts.knots, axis=0)
+        # mean = jnp.sum(weights[:, None, None] * rollouts.knots, axis=0)
+        noise_knots = (rollouts.knots - params.mean[None])
+        estim_grad = jnp.einsum("n,nij->ij", weights, noise_knots)
+        mean = params.mean + estim_grad
         return params.replace(mean=mean)

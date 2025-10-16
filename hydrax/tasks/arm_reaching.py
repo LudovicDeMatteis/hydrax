@@ -25,27 +25,46 @@ class ArmReaching(Task):
         self.ee_id = mj_model.body("link7").id
 
         # Set the target position
-        self.target_pos = jnp.array([0.4, 0.4, 0.6])
+        self.target_pos = jnp.array([0.4, 0.0, 0.3])
 
         # Initial configuration
-        self.qinit = jnp.array([0.0, -0.785, 0.0, -2.35, 0.0, 1.57, 0.785])
+        self.qinit = jnp.array(mj_model.keyframe("home").qpos)
 
     def _get_ee_pos(self, state: mjx.Data) -> jax.Array:
         """Get the position of the end effector."""
         return state.xpos[self.ee_id - 1]
 
     def running_cost(self, state: mjx.Data, control: jax.Array) -> jax.Array:
-        """The running cost l(x_t, u_t)."""
-        target_error = jnp.sum(
-            jnp.square(self._get_ee_pos(state) - self.target_pos)
-        )
-        config_reg = jnp.sum(jnp.square(state.qpos - self.qinit))
-        control_reg = jnp.sum(jnp.square(control))
-        return 10.0 * target_error + 0.1 * config_reg + 0.0 * control_reg
+        """
+            The running cost l(x_t, u_t)
+            The running cost is defined as l(x_t, u_t) = ||r||_2^2.
+        """
+        res = self.running_residuals(state, control)
+        cost = (1/2)*jnp.dot(res, res)
+        return cost
 
     def terminal_cost(self, state: mjx.Data) -> jax.Array:
         """The terminal cost phi(x_T)."""
-        return self.running_cost(state, jnp.zeros(self.model.nu))
+        res = self.terminal_residuals(state)
+        cost = (1/2)*jnp.dot(res, res)
+        return cost
+
+    def running_residuals(self, state: mjx.Data, control: jax.Array) -> jax.Array:
+        """
+            The running residuals r(x_t, u_t)
+            The running cost is defined as l(x_t, u_t) = ||r||_2^2.
+        """
+        target_error = self._get_ee_pos(state) - self.target_pos
+        config_reg = state.qpos - self.qinit
+        control_reg = control
+        residuals = jnp.concatenate(
+            [target_error, 0.1*config_reg, 0.03*control_reg]
+        )
+        return residuals
+
+    def terminal_residuals(self, state: mjx.Data) -> jax.Array:
+        """The terminal residual r_T(x_T)."""
+        return self.running_residuals(state, jnp.zeros(self.model.nu))
 
     def domain_randomize_model(self, rng: jax.Array) -> Dict[str, jax.Array]:
         """Randomize the friction parameters."""

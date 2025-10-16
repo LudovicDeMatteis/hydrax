@@ -2,17 +2,18 @@ from typing import Literal, Tuple
 
 import jax
 import jax.numpy as jnp
-from mujoco import mjx
 from flax.struct import dataclass
+from mujoco import mjx
 
-from hydrax.alg_base import SamplingBasedController, SamplingParams, Trajectory
+from hydrax.alg_base import SamplingParams
+from hydrax.alg_residual_base import SamplingBasedResidualController, TrajectoryResiduals
 from hydrax.risk import RiskStrategy
 from hydrax.task_base import Task
 
 
 @dataclass
-class PSParams(SamplingParams):
-    """Policy parameters for predictive sampling.
+class RSParams(SamplingParams):
+    """Policy parameters for randomized smoothing control.
 
     Same as SamplingParams, but with a different name for clarity.
 
@@ -22,10 +23,10 @@ class PSParams(SamplingParams):
         rng: The pseudo-random number generator key.
     """
 
-
-class PredictiveSampling(SamplingBasedController):
-    """A simple implementation of https://arxiv.org/abs/2212.00541."""
-
+class RSGaussNewton(SamplingBasedResidualController):
+    """
+      Randomized Smoothing control using residuals instead of cost (to use Gauss Newton)
+    """
     def __init__(
         self,
         task: Task,
@@ -43,8 +44,9 @@ class PredictiveSampling(SamplingBasedController):
 
         Args:
             task: The dynamics and cost for the system we want to control.
-            num_samples: The number of control tapes to sample.
+            num_samples: The number of control sequences to sample.
             noise_level: The scale of Gaussian noise to add to sampled controls.
+            alpha: The step size for the descent.
             num_randomizations: The number of domain randomizations to use.
             risk_strategy: How to combining costs from different randomizations.
                            Defaults to average cost.
@@ -70,12 +72,12 @@ class PredictiveSampling(SamplingBasedController):
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
-    ) -> PSParams:
+    ) -> RSParams:
         """Initialize the policy parameters."""
         _params = super().init_params(initial_knots, seed)
-        return PSParams(tk=_params.tk, mean=_params.mean, rng=_params.rng)
+        return RSParams(tk=_params.tk, mean=_params.mean, rng=_params.rng)
 
-    def sample_knots(self, params: PSParams) -> Tuple[jax.Array, PSParams]:
+    def sample_knots(self, params: RSParams) -> Tuple[jax.Array, RSParams]:
         """Sample a control sequence."""
         rng, sample_rng = jax.random.split(params.rng)
         noise = jax.random.normal(
@@ -87,15 +89,38 @@ class PredictiveSampling(SamplingBasedController):
             ),
         )
         controls = params.mean + self.noise_level * noise
-
-        # The original mean of the distribution is included as a sample
-        controls = controls.at[0].set(params.mean)
-
+        controls = jnp.concatenate([params.mean[None], controls], axis=0)
         return controls, params.replace(rng=rng)
 
-    def update_params(self, state: mjx.Data, params: PSParams, rollouts: Trajectory) -> PSParams:
-        """Update the policy parameters by choosing the lowest-cost rollout."""
-        costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
-        best_idx = jnp.argmin(costs)
-        mean = rollouts.knots[best_idx]
+    def update_params(
+        self, state:mjx.Data, params: RSParams, rollouts: TrajectoryResiduals
+    ) -> RSParams:
+        """Update the mean with the estimated gradient through randomized smoothing"""
+        def _linesearch(params, direction):
+            rng, dr_rng = jax.random.split(params.rng)
+            alphas = jnp.array([2**i for i in range(3, -10, -1)])
+            candidates = params.mean + alphas[:, None, None] * direction
+            rollouts = self.rollout_with_randomizations(
+                state, params.tk, candidates, dr_rng
+            )
+            params = params.replace(rng=rng)
+            residuals = jnp.reshape(rollouts.residuals, (candidates.shape[0], -1))
+            costs = jnp.sum(residuals**2, axis=1)
+            best = jnp.argmin(costs)
+            alpha = alphas[best]
+            return alpha
+
+        residuals = jnp.reshape(rollouts.residuals, (self.num_samples + 1, -1))
+        res_diff = residuals[1:] - residuals[0]
+        noise_knots = (rollouts.knots[1:] - params.mean[None])
+        estim_res_grad = jnp.einsum("ni,njk->ikj", res_diff, noise_knots) / (self.noise_level * self.num_samples)
+        estim_res_grad = jnp.reshape(estim_res_grad, (estim_res_grad.shape[0], -1))
+        approx_hessian = (estim_res_grad.T @ estim_res_grad) + 1e-6 * jnp.eye(estim_res_grad.shape[1])
+        direction = -jnp.linalg.inv(approx_hessian) @ estim_res_grad.T @ residuals[0]
+        direction = jnp.reshape(direction, params.mean.shape)
+        a = _linesearch(params, direction)
+        mean = params.mean + a * direction
+        mean = jnp.clip(
+            mean, self.task.u_min, self.task.u_max
+        )
         return params.replace(mean=mean)
