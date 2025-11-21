@@ -90,11 +90,12 @@ class MPPI(SamplingBasedController):
         noise = jax.random.normal(
             sample_rng,
             (
-                self.num_samples,
+                self.num_samples - 1,
                 self.num_knots,
                 self.task.model.nu,
             ),
         )
+        noise = jnp.vstack([jnp.zeros((1, self.num_knots, self.task.model.nu)), noise])
         controls = params.mean + self.noise_level * noise
         return controls, params.replace(rng=rng)
 
@@ -103,6 +104,15 @@ class MPPI(SamplingBasedController):
     ) -> MPPIParams:
         """Update the mean with an exponentially weighted average."""
         costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
+        #
+        # knots_std = jnp.std(rollouts.knots, axis=1)  # std for each trajectory
+        # knots_std_sum = jnp.sum(knots_std, axis=tuple(range(1, knots_std.ndim)))  # sum over knot dims if needed
+        # max_cost = jnp.max(costs)
+        # max_std = jnp.max(knots_std_sum)
+        # Add std of knots to cost to penalize high variance trajectories
+        # Add it as 10% of the max cost to keep scale reasonable
+        # costs = costs + knots_std_sum * (0.1 * max_cost / (max_std + 1e-6))
+        costs = jnp.nan_to_num(costs, nan=100)
         # N.B. jax.nn.softmax takes care of details like baseline subtraction.
         weights = jax.nn.softmax(-costs / self.temperature, axis=0)
         mean = jnp.sum(weights[:, None, None] * rollouts.knots, axis=0)

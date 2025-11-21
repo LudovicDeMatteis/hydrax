@@ -2,7 +2,7 @@ import argparse
 
 import mujoco
 
-from hydrax.algs import CEM
+from hydrax.algs import CEM, MPPI
 from hydrax.simulation.deterministic import run_interactive
 from hydrax.tasks.humanoid_mocap import HumanoidMocap
 
@@ -38,13 +38,16 @@ args = parser.parse_args()
 task = HumanoidMocap(reference_filename=args.reference_filename)
 
 # Set up the controller
-ctrl = CEM(
+ctrl = MPPI(
     task,
     num_samples=512,
-    num_elites=20,
-    sigma_start=0.2,
-    sigma_min=0.05,
-    explore_fraction=0.5,
+    noise_level=0.3,
+    temperature=0.1,
+    num_randomizations=4,
+    # num_elites=20,
+    # sigma_start=0.2,
+    # sigma_min=0.05,
+    # explore_fraction=0.5,
     plan_horizon=0.6,
     spline_type="zero",
     num_knots=4,
