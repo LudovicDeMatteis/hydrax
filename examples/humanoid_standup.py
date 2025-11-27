@@ -50,7 +50,7 @@ if __name__ == "__main__":
     # Set the initial state so the robot falls and needs to stand back up
     mj_data = mujoco.MjData(mj_model)
     mj_data.qpos[:] = mj_model.keyframe("stand").qpos
-    mj_data.qpos[3:7] = [0.7, 0.0, -0.7, 0.0]
+    # mj_data.qpos[3:7] = [0.7, 0.0, -0.7, 0.0]
 
     # Run the interactive simulation
     if args.asynchronous:
