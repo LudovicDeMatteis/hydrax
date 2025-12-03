@@ -33,6 +33,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     reference: np.ndarray = None,
     reference_fps: float = 30.0,
     record_video: bool = False,
+    log_traj: bool = False,
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -60,6 +61,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         reference: The reference trajectory (qs) to visualize.
         reference_fps: The frame rate of the reference trajectory.
         record_video: Whether to record a video of the simulation.
+        log_traj: Whether to log the trajectory data.
     """
     # Report the planning horizon in seconds for debugging
     print(
@@ -121,6 +123,16 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             record_video = False
         renderer = mujoco.Renderer(mj_model, height=height, width=width)
 
+    if log_traj:
+        logger = {
+            "time": [],
+            "qpos": [],
+            "qvel": [],
+            "ctrl": [],
+            "qacc": [],
+            "tau": [],
+        }
+
     # Start the simulation
     with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
         viewer.opt.sitegroup[5] = 1
@@ -157,8 +169,6 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             mjx_data = mjx_data.replace(
                 qpos=jnp.array(mj_data.qpos),
                 qvel=jnp.array(mj_data.qvel),
-                mocap_pos=jnp.array(mj_data.mocap_pos),
-                mocap_quat=jnp.array(mj_data.mocap_quat),
                 time=mj_data.time,
             )
 
@@ -181,7 +191,6 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                                 rollouts.trace_sites[i, j + 1, k],
                             )
                             ii += 1
-
 
             # query the control spline at the sim frequency
             # (we assume the sim freq is the same as the low-level ctrl freq)
@@ -214,6 +223,19 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                     frame = renderer.render()
                     recorder.add_frame(frame.tobytes())
 
+                if log_traj:
+                    # We should log:
+                    # - current time
+                    # - current state (configuration and velocity)
+                    # - current control
+                    # - contact forces on the ground ?
+                    logger["time"].append(mj_data.time)
+                    logger["qpos"].append(np.array(mj_data.qpos))
+                    logger["qvel"].append(np.array(mj_data.qvel))
+                    logger["ctrl"].append(np.array(mj_data.ctrl))
+                    logger["qacc"].append(np.array(mj_data.qacc))
+                    logger["tau"].append(np.array(mj_data.actuator_force))
+
             # Try to run in roughly realtime
             elapsed = time.time() - start_time
             if elapsed < step_dt:
@@ -232,3 +254,14 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Close the video recorder if recording was enabled
     if record_video and recorder is not None:
         recorder.stop()
+
+    if log_traj:
+        np.savez_compressed(
+            os.path.join("./logs", "traj_log.npz"),
+            time=np.array(logger["time"]),
+            qpos=np.array(logger["qpos"]),
+            qvel=np.array(logger["qvel"]),
+            ctrl=np.array(logger["ctrl"]),
+            qacc=np.array(logger["qacc"]),
+            tau=np.array(logger["tau"])
+        )
