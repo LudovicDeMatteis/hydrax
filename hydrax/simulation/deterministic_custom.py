@@ -34,6 +34,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     reference_fps: float = 30.0,
     record_video: bool = False,
     log_traj: bool = False,
+    stop_time: float = -1.0,
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -247,6 +248,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 f"Realtime rate: {rtr:.2f}, plan time: {plan_time:.4f}s",
                 end="\r",
             )
+            if stop_time > 0.0 and mj_data.time >= stop_time:
+                break
 
     # Preserve the last printout
     print("")
@@ -256,8 +259,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         recorder.stop()
 
     if log_traj:
+        name = input("Enter log file name: ")
         np.savez_compressed(
-            os.path.join("./logs", "traj_log.npz"),
+            os.path.join("./logs", name),
             time=np.array(logger["time"]),
             qpos=np.array(logger["qpos"]),
             qvel=np.array(logger["qvel"]),
