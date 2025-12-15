@@ -137,11 +137,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Start the simulation
     with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
         viewer.opt.sitegroup[5] = 1
-        if fixed_camera_id is not None:
-            # Set the custom camera
-            viewer.cam.fixedcamid = fixed_camera_id
-            viewer.cam.type = 2
-
+        viewer.cam.trackbodyid = 0
+        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        viewer.cam.distance = 5.0
+        viewer.cam.elevation = -30
+        viewer.cam.azimuth = 45
+        
         # Set up rollout traces
         if show_traces:
             num_trace_sites = len(controller.task.trace_site_ids)
