@@ -1,6 +1,7 @@
 import time
-from typing import Sequence
 import os
+from typing import Sequence
+from contextlib import nullcontext
 
 import jax
 import jax.numpy as jnp
@@ -34,7 +35,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     reference_fps: float = 30.0,
     record_video: bool = False,
     log_traj: bool = False,
-    stop_time: float = -1.0,
+    stop_time: float = 5.0,
+    headless: bool = False, 
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -135,36 +137,52 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         }
 
     # Start the simulation
-    with mujoco.viewer.launch_passive(mj_model, mj_data) as viewer:
-        viewer.opt.sitegroup[5] = 1
-        viewer.cam.trackbodyid = 0
-        viewer.cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
-        viewer.cam.distance = 5.0
-        viewer.cam.elevation = -30
-        viewer.cam.azimuth = 45
+    viewer_context = mujoco.viewer.launch_passive(mj_model, mj_data) if not headless else nullcontext()
+    
+    with viewer_context as viewer:
+        if not headless:
+            viewer.opt.sitegroup[5] = 1
+            cam = viewer.cam
+            opt = viewer.opt
         
-        # Set up rollout traces
-        if show_traces:
-            num_trace_sites = len(controller.task.trace_site_ids)
-            for i in range(
-                num_trace_sites * num_traces * controller.ctrl_steps
-            ):
-                mujoco.mjv_initGeom(
-                    viewer.user_scn.geoms[i],
-                    type=mujoco.mjtGeom.mjGEOM_LINE,
-                    size=np.zeros(3),
-                    pos=np.zeros(3),
-                    mat=np.eye(3).flatten(),
-                    rgba=np.array(trace_color),
-                )
-                viewer.user_scn.ngeom += 1
+            # Set up rollout traces
+            if show_traces:
+                num_trace_sites = len(controller.task.trace_site_ids)
+                for i in range(
+                    num_trace_sites * num_traces * controller.ctrl_steps
+                ):
+                    mujoco.mjv_initGeom(
+                        viewer.user_scn.geoms[i],
+                        type=mujoco.mjtGeom.mjGEOM_LINE,
+                        size=np.zeros(3),
+                        pos=np.zeros(3),
+                        mat=np.eye(3).flatten(),
+                        rgba=np.array(trace_color),
+                    )
+                    viewer.user_scn.ngeom += 1
+        else:
+            cam = mujoco.MjvCamera()
+            opt = mujoco.MjvOption()
+            opt.sitegroup[5] = 1 
+            show_traces = False
+        
+        cam.trackbodyid = 0
+        cam.type = mujoco.mjtCamera.mjCAMERA_TRACKING
+        cam.distance = 3.0
+        cam.elevation = -20
+        cam.azimuth = 135
 
         # Add geometry for the ghost reference
         if reference is not None:
             n_sites = len(reference[0])
             site_ids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, f"marker{i+1}") for i in range(n_sites)]
 
-        while viewer.is_running():
+        while True:
+            if not headless and not viewer.is_running():
+                break
+            if stop_time > 0.0 and mj_data.time >= stop_time:
+                break
+            
             start_time = time.time()
 
             # Set the start state for the controller
@@ -217,20 +235,17 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
                     for i, site_id in enumerate(site_ids):
                         mj_data.site_xpos[site_id] = ref_positions[i]
-                viewer.sync()
+                        
+                if not headless:
+                    viewer.sync()
 
                 # Capture frame if recording
                 if record_video and recorder.is_recording:
-                    renderer.update_scene(mj_data, viewer.cam)
+                    renderer.update_scene(mj_data, cam, opt)
                     frame = renderer.render()
                     recorder.add_frame(frame.tobytes())
 
                 if log_traj:
-                    # We should log:
-                    # - current time
-                    # - current state (configuration and velocity)
-                    # - current control
-                    # - contact forces on the ground ?
                     logger["time"].append(mj_data.time)
                     logger["qpos"].append(np.array(mj_data.qpos))
                     logger["qvel"].append(np.array(mj_data.qvel))
