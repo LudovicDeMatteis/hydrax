@@ -175,7 +175,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         # Add geometry for the ghost reference
         if reference is not None:
             n_sites = len(reference[0])
-            site_ids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, f"marker{i+1}") for i in range(n_sites)]
+            site_ids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, f"marker{i}") for i in range(n_sites)]
 
         while True:
             if not headless and not viewer.is_running():
