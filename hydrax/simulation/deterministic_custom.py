@@ -35,7 +35,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     reference_fps: float = 30.0,
     record_video: bool = False,
     log_traj: bool = False,
-    stop_time: float = 5.0,
+    stop_time: float = -1.0,
     headless: bool = False, 
 ) -> None:
     """Run an interactive simulation with the MPC controller.
@@ -258,13 +258,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             if elapsed < step_dt:
                 time.sleep(step_dt - elapsed)
 
-            # Print some timing information
-            rtr = step_dt / (time.time() - start_time)
-            print(
-                f"Realtime rate: {rtr:.2f}, plan time: {plan_time:.4f}s",
-                end="\r",
-            )
-            if stop_time > 0.0 and mj_data.time >= stop_time:
+            if (stop_time > 0.0 and mj_data.time >= stop_time) or (stop_time < 0.0 and hasattr(controller.task, "stop_time") and mj_data.time >= controller.task.stop_time):
                 break
 
     # Preserve the last printout
