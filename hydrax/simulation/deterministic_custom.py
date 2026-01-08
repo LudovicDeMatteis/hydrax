@@ -1,5 +1,6 @@
 import time
 import os
+import tqdm
 from typing import Sequence
 from contextlib import nullcontext
 
@@ -177,10 +178,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             n_sites = len(reference[0])
             site_ids = [mujoco.mj_name2id(mj_model, mujoco.mjtObj.mjOBJ_SITE, f"marker{i}") for i in range(n_sites)]
 
+        if hasattr(controller.task, "stop_time"):
+            pbar = tqdm.tqdm(total=controller.task.stop_time)
         while True:
+            if hasattr(controller.task, "stop_time"):
+                pbar.update(step_dt)
             if not headless and not viewer.is_running():
-                break
-            if stop_time > 0.0 and mj_data.time >= stop_time:
                 break
             
             start_time = time.time()
@@ -260,6 +263,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
             if (stop_time > 0.0 and mj_data.time >= stop_time) or (stop_time < 0.0 and hasattr(controller.task, "stop_time") and mj_data.time >= controller.task.stop_time):
                 break
+        if hasattr(controller.task, "stop_time"):
+            pbar.close()
 
     # Preserve the last printout
     print("")
