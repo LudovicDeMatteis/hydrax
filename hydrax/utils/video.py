@@ -12,6 +12,7 @@ class VideoRecorder:
     def __init__(
         self,
         output_dir: str,
+        name: str = "simulation",
         width: int = 720,
         height: int = 480,
         fps: float = 30.0,
@@ -25,6 +26,7 @@ class VideoRecorder:
             fps: Frames per second.
         """
         self.output_dir = output_dir
+        self.name = name
         self.width = width
         self.height = height
         self.fps = fps
@@ -50,7 +52,7 @@ class VideoRecorder:
         # Generate output path with timestamp
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         self.video_path = os.path.join(
-            self.output_dir, f"simulation_{timestamp}.mp4"
+            self.output_dir, f"{self.name}_{timestamp}.mp4"
         )
 
         # Check if FFmpeg is available

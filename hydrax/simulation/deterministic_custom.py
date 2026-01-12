@@ -29,6 +29,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     initial_knots: jax.Array = None,
     fixed_camera_id: int = None,
     show_traces: bool = True,
+    experiment_name: str = "simulation",
     max_traces: int = 5,
     trace_width: float = 5.0,
     trace_color: Sequence = [1.0, 1.0, 1.0, 0.1],
@@ -116,6 +117,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         # Create the video recorder
         recorder = VideoRecorder(
             output_dir=os.path.join("./", "recordings"),
+            name=experiment_name,
             width=width,
             height=height,
             fps=actual_frequency,
