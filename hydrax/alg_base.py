@@ -30,7 +30,8 @@ class Trajectory:
     knots: jax.Array
     costs: jax.Array
     trace_sites: jax.Array
-
+    cost_components: jax.Array = None
+    
     def __len__(self):
         """Return the number of time steps in the trajectory (T)."""
         return self.costs.shape[-1] - 1
@@ -145,31 +146,37 @@ class SamplingBasedController(ABC):
 
         def _optimize_scan_body(params: Any, _: Any):
             # Sample random control sequences from spline knots
-            knots, params = self.sample_knots(params)
-            knots = jnp.clip(
-                knots, self.task.u_min, self.task.u_max
-            )  # (num_rollouts, num_knots, nu)
-
+            knots, params, metrics = self.sample_knots(params)
+            
             # Roll out the control sequences, applying domain randomizations and
             # combining costs using self.risk_strategy.
             rng, dr_rng = jax.random.split(params.rng)
-            rollouts = self.rollout_with_randomizations(
-                state, new_tk, knots, dr_rng
-            )
+            rollouts = self.rollout_with_randomizations(state, new_tk, knots, dr_rng)
             params = params.replace(rng=rng)
 
             # Update the policy parameters based on the combined costs
             params = self.update_params(params, rollouts)
+            
+            # Update metrics
+            all_components = rollouts.cost_components[0]
+            total_traj_costs = jnp.sum(rollouts.costs, axis=-1)
+            best_idx = jnp.argmin(total_traj_costs)
+            metrics["best_cost"] = total_traj_costs[best_idx]
+            winner_components = all_components[best_idx]
+            winner_totals = jnp.sum(winner_components, axis=0)
+         
+            num_types = winner_totals.shape[0]
+            for i in range(num_types):
+                 metrics[f"costs/{i}/value"] = winner_totals[i]
 
-            return params, rollouts
-
-        params, rollouts = jax.lax.scan(
+            return params, (rollouts, metrics)
+        params, (rollouts, h_metrics) = jax.lax.scan(
             f=_optimize_scan_body, init=params, xs=jnp.arange(self.iterations)
         )
 
         rollouts_final = jax.tree.map(lambda x: x[-1], rollouts)
 
-        return params, rollouts_final
+        return params, rollouts_final, h_metrics
 
     def rollout_with_randomizations(
         self,
@@ -246,27 +253,33 @@ class SamplingBasedController(ABC):
 
         def _scan_fn(
             x: mjx.Data, u: jax.Array
-        ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array]]:
+        ) -> Tuple[mjx.Data, Tuple[mjx.Data, jax.Array, jax.Array, jax.Array]]:
             """Compute the cost and observation, then advance the state."""
             x = x.replace(ctrl=u)
             x = mjx.step(model, x)  # step model + compute site positions
-            cost = self.dt * self.task.running_cost(x, u)
+            c_vec = self.dt * self.task.running_cost(x, u)
+            c_scalar = jnp.sum(c_vec)
             sites = self.task.get_trace_sites(x)
-            return x, (x, cost, sites)
+            return x, (x, c_scalar, c_vec, sites)
 
-        final_state, (states, costs, trace_sites) = jax.lax.scan(
+        final_state, (states, costs, cost_components, trace_sites) = jax.lax.scan(
             _scan_fn, state, controls
         )
-        final_cost = self.task.terminal_cost(final_state)
+        final_c_vec = self.task.terminal_cost(final_state)
+        final_c_scalar = jnp.sum(final_c_vec)
+        
         final_trace_sites = self.task.get_trace_sites(final_state)
+        
+        costs = jnp.append(costs, final_c_scalar)
+        cost_components = jnp.concatenate([cost_components, final_c_vec[None, :]], axis=0)
 
-        costs = jnp.append(costs, final_cost)
         trace_sites = jnp.append(trace_sites, final_trace_sites[None], axis=0)
 
         return states, Trajectory(
             controls=controls,
             knots=knots,
             costs=costs,
+            cost_components=cost_components,
             trace_sites=trace_sites,
         )
 
@@ -295,7 +308,7 @@ class SamplingBasedController(ABC):
         return SamplingParams(tk=tk, mean=mean, rng=rng)
 
     @abstractmethod
-    def sample_knots(self, params: Any) -> Tuple[jax.Array, Any]:
+    def sample_knots(self, params: Any) -> Tuple[jax.Array, Any, dict]:
         """Sample a set of control spline knots U ~ π(params).
 
         Args:

@@ -111,7 +111,7 @@ class DIAL(SamplingBasedController):
             tk=_params.tk, mean=_params.mean, rng=_params.rng, opt_iteration=0
             )
 
-    def sample_knots(self, params: DIALParams) -> Tuple[jax.Array, DIALParams]:
+    def sample_knots(self, params: DIALParams) -> Tuple[jax.Array, DIALParams, dict]:
         """Sample control knots.
 
         Anneals noise and adds it to the mean control sequence, then increments
@@ -136,7 +136,7 @@ class DIAL(SamplingBasedController):
         return controls, params.replace(
             opt_iteration=(params.opt_iteration + 1) % self.iterations,
             rng=rng,
-        )
+        ), {}
 
     def update_params(
         self, params: DIALParams, rollouts: Trajectory

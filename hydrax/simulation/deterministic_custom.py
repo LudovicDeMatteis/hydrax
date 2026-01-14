@@ -3,6 +3,8 @@ import os
 import tqdm
 from typing import Sequence
 from contextlib import nullcontext
+import matplotlib.pyplot as plt
+from pathlib import Path
 
 import jax
 import jax.numpy as jnp
@@ -14,6 +16,7 @@ from mujoco import mjx
 from hydrax.alg_base import SamplingBasedController
 from hydrax import ROOT
 from hydrax.utils.video import VideoRecorder
+from hydrax.utils.log import plot_solver_metrics
 
 """
 Tools for deterministic (synchronous) simulation, with the simulator and
@@ -27,18 +30,15 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     mj_data: mujoco.MjData,
     frequency: float,
     initial_knots: jax.Array = None,
-    fixed_camera_id: int = None,
     show_traces: bool = True,
-    experiment_name: str = "simulation",
     max_traces: int = 5,
     trace_width: float = 5.0,
     trace_color: Sequence = [1.0, 1.0, 1.0, 0.1],
     reference: np.ndarray = None,
     reference_fps: float = 30.0,
-    record_video: bool = False,
-    log_traj: bool = False,
     stop_time: float = -1.0,
     headless: bool = False, 
+    log_path: Path = "",
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -65,8 +65,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
         trace_color: The RGBA color of the trace lines.
         reference: The reference trajectory (qs) to visualize.
         reference_fps: The frame rate of the reference trajectory.
-        record_video: Whether to record a video of the simulation.
-        log_traj: Whether to log the trajectory data.
+        lstop_time: TODO
+        headless: TODO
+        log_path: TODO
     """
     # Report the planning horizon in seconds for debugging
     print(
@@ -98,8 +99,8 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Warm-up the controller
     print("Jitting the controller...")
     st = time.time()
-    policy_params, rollouts = jit_optimize(mjx_data, policy_params)
-    policy_params, rollouts = jit_optimize(mjx_data, policy_params)
+    policy_params, rollouts, metrics = jit_optimize(mjx_data, policy_params)
+    policy_params, rollouts, metrics = jit_optimize(mjx_data, policy_params)
 
     tq = jnp.arange(0, sim_steps_per_replan) * mj_model.opt.timestep
     tk = policy_params.tk
@@ -111,25 +112,25 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
     # Initialize video recording if enabled
     recorder = None
-    if record_video:
+    if log_path:
         # Video dimensions
         width, height = 720, 480
         # Create the video recorder
         recorder = VideoRecorder(
-            output_dir=os.path.join("./", "recordings"),
-            name=experiment_name,
+            output_dir=os.path.join(log_path, "videos"),
             width=width,
             height=height,
-            fps=actual_frequency,
+            fps=int(1/mj_model.opt.timestep),
         )
         # Ensure model visual offscreen buffer is compatible with video recording
         mj_model.vis.global_.offwidth = width
         mj_model.vis.global_.offheight = height
-        if not recorder.start():
-            record_video = False
+        recorder.start()
         renderer = mujoco.Renderer(mj_model, height=height, width=width)
-
-    if log_traj:
+    
+    if log_path:
+        metrics_log = {"time": []}
+        
         logger = {
             "time": [],
             "qpos": [],
@@ -198,9 +199,17 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             )
 
             # Do a replanning step
-            plan_start = time.time()
-            policy_params, rollouts = jit_optimize(mjx_data, policy_params)
-            plan_time = time.time() - plan_start
+            policy_params, rollouts, metrics = jit_optimize(mjx_data, policy_params)
+            
+            if log_path:   
+                # Extract scalar values from JAX arrays for logging
+                metrics_log["time"].append(mj_data.time)
+                
+                for key, val_history in metrics.items():
+                    if key not in metrics_log:
+                        metrics_log[key] = []
+                    # Extract last iteration value as float
+                    metrics_log[key].append(float(val_history[-1]))
 
             # Visualize the rollouts
             if show_traces:
@@ -245,12 +254,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                     viewer.sync()
 
                 # Capture frame if recording
-                if record_video and recorder.is_recording:
+                if log_path and recorder.is_recording:
                     renderer.update_scene(mj_data, cam, opt)
                     frame = renderer.render()
                     recorder.add_frame(frame.tobytes())
 
-                if log_traj:
+                if log_path:
                     logger["time"].append(mj_data.time)
                     logger["qpos"].append(np.array(mj_data.qpos))
                     logger["qvel"].append(np.array(mj_data.qvel))
@@ -271,14 +280,15 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     # Preserve the last printout
     print("")
 
-    # Close the video recorder if recording was enabled
-    if record_video and recorder is not None:
-        recorder.stop()
-
-    if log_traj:
-        name = input("Enter log file name: ")
+    if log_path:
+        if recorder is not None:
+            recorder.stop()
+    
+        traj_output_dir = os.path.join(log_path, "trajectories") 
+        if not os.path.exists(traj_output_dir):
+            os.makedirs(traj_output_dir)
         np.savez_compressed(
-            os.path.join("./logs", name),
+            os.path.join(traj_output_dir, "trajectory.npz"),
             time=np.array(logger["time"]),
             qpos=np.array(logger["qpos"]),
             qvel=np.array(logger["qvel"]),
@@ -286,3 +296,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             qacc=np.array(logger["qacc"]),
             tau=np.array(logger["tau"])
         )
+        
+        metrics_output_dir = os.path.join(log_path, "metrics") 
+        if not os.path.exists(metrics_output_dir):
+            os.makedirs(metrics_output_dir)
+        plot_solver_metrics(metrics_log, metrics_output_dir)
+        

@@ -110,7 +110,7 @@ class Evosax(SamplingBasedController):
 
     def sample_knots(
         self, params: EvosaxParams
-    ) -> Tuple[jax.Array, EvosaxParams]:
+    ) -> Tuple[jax.Array, EvosaxParams, dict]:
         """Sample control sequences from the proposal distribution."""
         rng, sample_rng = jax.random.split(params.rng)
         x, opt_state = self.strategy.ask(
@@ -128,7 +128,7 @@ class Evosax(SamplingBasedController):
             ),
         )
 
-        return controls, params.replace(opt_state=opt_state, rng=rng)
+        return controls, params.replace(opt_state=opt_state, rng=rng), {}
 
     def update_params(
         self, params: EvosaxParams, rollouts: Trajectory

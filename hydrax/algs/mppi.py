@@ -84,7 +84,7 @@ class MPPI(SamplingBasedController):
         _params = super().init_params(initial_knots, seed)
         return MPPIParams(tk=_params.tk, mean=_params.mean, rng=_params.rng)
 
-    def sample_knots(self, params: MPPIParams) -> Tuple[jax.Array, MPPIParams]:
+    def sample_knots(self, params: MPPIParams) -> Tuple[jax.Array, MPPIParams, dict]:
         """Sample a control sequence."""
         rng, sample_rng = jax.random.split(params.rng)
         noise = jax.random.normal(
@@ -97,7 +97,7 @@ class MPPI(SamplingBasedController):
         )
         noise = jnp.vstack([jnp.zeros((1, self.num_knots, self.task.model.nu)), noise])
         controls = params.mean + self.noise_level * noise
-        return controls, params.replace(rng=rng)
+        return controls, params.replace(rng=rng), {}
 
     def update_params(
         self, params: MPPIParams, rollouts: Trajectory

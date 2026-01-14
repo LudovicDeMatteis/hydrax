@@ -74,7 +74,7 @@ class PredictiveSampling(SamplingBasedController):
         _params = super().init_params(initial_knots, seed)
         return PSParams(tk=_params.tk, mean=_params.mean, rng=_params.rng)
 
-    def sample_knots(self, params: PSParams) -> Tuple[jax.Array, PSParams]:
+    def sample_knots(self, params: PSParams) -> Tuple[jax.Array, PSParams, dict]:
         """Sample a control sequence."""
         rng, sample_rng = jax.random.split(params.rng)
         noise = jax.random.normal(
@@ -90,7 +90,7 @@ class PredictiveSampling(SamplingBasedController):
         # The original mean of the distribution is included as a sample
         controls = controls.at[0].set(params.mean)
 
-        return controls, params.replace(rng=rng)
+        return controls, params.replace(rng=rng), {}
 
     def update_params(self, params: PSParams, rollouts: Trajectory) -> PSParams:
         """Update the policy parameters by choosing the lowest-cost rollout."""

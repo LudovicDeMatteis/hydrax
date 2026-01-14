@@ -92,7 +92,7 @@ class CEM(SamplingBasedController):
             tk=_params.tk, mean=_params.mean, cov=cov, rng=_params.rng
         )
 
-    def sample_knots(self, params: CEMParams) -> Tuple[jax.Array, CEMParams]:
+    def sample_knots(self, params: CEMParams) -> Tuple[jax.Array, CEMParams, dict]:
         """Sample a control sequence."""
         rng, sample_rng, explore_rng = jax.random.split(params.rng, 3)
 
@@ -125,7 +125,13 @@ class CEM(SamplingBasedController):
 
         # Combine both sets of controls
         controls = jnp.concatenate([main_controls, explore_controls])
-        return controls, params.replace(rng=rng)
+        
+        # Get metrics
+        metrics = {
+            "cem_convergence": jnp.mean(jnp.abs(params.cov)),
+            "cem_sigma_max": jnp.max(params.cov)
+        }
+        return controls, params.replace(rng=rng), metrics
 
     def update_params(
         self, params: CEMParams, rollouts: Trajectory
