@@ -161,7 +161,6 @@ class SamplingBasedController(ABC):
             all_components = rollouts.cost_components[0]
             total_traj_costs = jnp.sum(rollouts.costs, axis=-1)
             best_idx = jnp.argmin(total_traj_costs)
-            metrics["best_cost"] = total_traj_costs[best_idx]
             winner_components = all_components[best_idx]
             winner_totals = jnp.sum(winner_components, axis=0)
          
