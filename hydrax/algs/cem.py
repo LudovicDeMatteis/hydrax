@@ -41,6 +41,7 @@ class CEM(SamplingBasedController):
         spline_type: Literal["zero", "linear", "cubic"] = "zero",
         num_knots: int = 4,
         iterations: int = 1,
+        gamma: float = 1.0,
     ) -> None:
         """Initialize the controller.
 
@@ -60,6 +61,7 @@ class CEM(SamplingBasedController):
                          Defaults to "zero" (zero-order hold).
             num_knots: The number of knots in the control spline.
             iterations: The number of optimization iterations to perform.
+            gamma: The discount factor [0, 1]. Defaults to 1.0 (no discount).
         """
         if not 0 <= explore_fraction <= 1:
             raise ValueError(
@@ -81,6 +83,7 @@ class CEM(SamplingBasedController):
         self.sigma_start = sigma_start
         self.num_elites = num_elites
         self.num_explore = int(self.num_samples * explore_fraction)
+        self.gamma = gamma
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
@@ -137,7 +140,10 @@ class CEM(SamplingBasedController):
         self, params: CEMParams, rollouts: Trajectory
     ) -> CEMParams:
         """Update the mean with an exponentially weighted average."""
-        costs = jnp.sum(rollouts.costs, axis=1)  # sum over time steps
+        T = rollouts.costs.shape[1]
+        discounts = jnp.power(self.gamma, jnp.arange(T))
+        
+        costs = jnp.sum(rollouts.costs * discounts, axis=1)
 
         # Sort the costs and get the indices of the elites.
         indices = jnp.argsort(costs)
