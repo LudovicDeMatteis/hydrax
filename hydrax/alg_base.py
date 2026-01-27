@@ -257,6 +257,7 @@ class SamplingBasedController(ABC):
             x = x.replace(ctrl=u)
             x = mjx.step(model, x)  # step model + compute site positions
             c_vec = self.dt * self.task.running_cost(x, u)
+            c_vec = jnp.where(jnp.isnan(c_vec), 99999, c_vec)
             c_scalar = jnp.sum(c_vec)
             sites = self.task.get_trace_sites(x)
             return x, (x, c_scalar, c_vec, sites)
@@ -265,6 +266,7 @@ class SamplingBasedController(ABC):
             _scan_fn, state, controls
         )
         final_c_vec = self.task.terminal_cost(final_state)
+        final_c_vec = jnp.where(jnp.isnan(final_c_vec), 99999, final_c_vec)
         final_c_scalar = jnp.sum(final_c_vec)
         
         final_trace_sites = self.task.get_trace_sites(final_state)
