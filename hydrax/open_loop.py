@@ -14,7 +14,10 @@ from hydrax.alg_base import SamplingBasedController
 def trajectory_optimization(
     ctrl: SamplingBasedController,
     initial_state: mjx.Data,
-    iterations: int,
+    max_iterations: int,
+    initial_knots: jax.Array,
+    verbose: bool = True,
+    convergence_tol = 1e-2,
 ) -> mjx.Data:
     """Perform open-loop sampling-based trajectory optimization.
 
@@ -30,16 +33,19 @@ def trajectory_optimization(
         optimized trajectory. For example, the configuration at the i-th
         timestep will be in data.qpos[i].
     """
-    assert iterations > 0, "Number of iterations must be positive"
+    assert max_iterations > 0, "Number of iterations must be positive"
 
-    params = ctrl.init_params()
+    params = ctrl.init_params(initial_knots=initial_knots)
     jit_optimizer_step = jax.jit(ctrl.optimize)
 
-    print("Starting open-loop trajectory optimization...")
-    start_time = datetime.now()
-    for i in range(iterations):
+    if verbose:
+        print("Starting open-loop trajectory optimization...")
+
+    previous_cost = 1000
+    for i in range(max_iterations):
         # Perform a single optimization step
-        params, rollouts = jit_optimizer_step(initial_state, params)
+        start_time = datetime.now()
+        params, rollouts, metrics = jit_optimizer_step(initial_state, params)
 
         # Report average and best cost
         costs = jnp.sum(rollouts.costs, axis=1)  # sum over timesteps
@@ -49,27 +55,33 @@ def trajectory_optimization(
 
         # Progress printout
         elapsed = datetime.now() - start_time
-        print(
-            f"  Iteration {i + 1}/{iterations} | Cost: {best_cost:.3f}, "
-            + f"Avg: {avg_cost:.3f}, Std: {std_cost:.3f}, Time: {elapsed}"
-        )
+        if verbose:
+            print(
+                f"  Iteration {i + 1}/{max_iterations} | Cost: {best_cost:.3f}, "
+                + f"Avg: {avg_cost:.3f}, Std: {std_cost:.3f}, Time: {elapsed}"
+            )
+
+        if jnp.abs(best_cost - previous_cost) < convergence_tol:
+            break
+        previous_cost = best_cost.copy()
 
     # Select the minimum-cost trajectory
     best_idx = jnp.argmin(costs)
 
     # Get the state trajectory corresponding to the best trajectory
-    print("Retrieving best trajectory...")
-    states, _ = jax.jit(ctrl.eval_rollouts)(
-        ctrl.model,
-        initial_state,
-        rollouts.controls[best_idx, None],  # get the proper vmap shape
-        rollouts.knots[best_idx, None],
-    )
+    # print("Retrieving best trajectory...")
+    # states, _ = jax.jit(ctrl.eval_rollouts)(
+    #     ctrl.model,
+    #     initial_state,
+    #     rollouts.controls[best_idx, None],  # get the proper vmap shape
+    #     rollouts.knots[best_idx, None],
+    # )
 
     # Un-vmap the trajectory to get arrays of shape (T, ...)
-    states = jax.tree.map(lambda x: x[0], states)
+    # states = jax.tree.map(lambda x: x[0], states)
 
-    return states
+    # return states
+    return rollouts.knots[best_idx], rollouts.controls[best_idx], best_cost
 
 
 def playback(trajectory: mjx.Data, ctrl: SamplingBasedController) -> None:
