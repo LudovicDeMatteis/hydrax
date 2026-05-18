@@ -39,6 +39,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     stop_time: float = -1.0,
     headless: bool = False, 
     log_path: Path = "",
+    ik_ctrl = None,
 ) -> None:
     """Run an interactive simulation with the MPC controller.
 
@@ -197,6 +198,15 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 qvel=jnp.array(mj_data.qvel),
                 time=mj_data.time,
             )
+            
+            if ik_ctrl is not None:
+                tk_new = jnp.linspace(0.0, controller.plan_horizon, controller.num_knots) + mj_data.time
+                knot_indices = np.clip(np.round(tk_new * reference_fps).astype(int), 0, len(ik_ctrl) - 1)
+                ik_mean = ik_ctrl[knot_indices]
+                policy_params = policy_params.replace(
+                    tk=jnp.array(tk_new),
+                    mean=jnp.array(ik_mean)
+                )
 
             # Do a replanning step
             policy_params, rollouts, metrics = jit_optimize(mjx_data, policy_params)
