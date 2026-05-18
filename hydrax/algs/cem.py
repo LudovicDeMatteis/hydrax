@@ -41,7 +41,9 @@ class CEM(SamplingBasedController):
         spline_type: Literal["zero", "linear", "cubic"] = "zero",
         num_knots: int = 4,
         iterations: int = 1,
-        gamma: float = 1.0,
+        alpha_mean: float = 0.8, 
+        alpha_cov: float = 0.8, 
+        temperature: float = 1.0,
     ) -> None:
         """Initialize the controller.
 
@@ -83,7 +85,9 @@ class CEM(SamplingBasedController):
         self.sigma_start = sigma_start
         self.num_elites = num_elites
         self.num_explore = int(self.num_samples * explore_fraction)
-        self.gamma = gamma
+        self.alpha_mean = alpha_mean
+        self.alpha_cov = alpha_cov
+        self.temperature = temperature
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
@@ -139,19 +143,35 @@ class CEM(SamplingBasedController):
     def update_params(
         self, params: CEMParams, rollouts: Trajectory
     ) -> CEMParams:
-        """Update the mean with an exponentially weighted average."""
-        T = rollouts.costs.shape[1]
-        discounts = jnp.power(self.gamma, jnp.arange(T))
-        
-        costs = jnp.sum(rollouts.costs * discounts, axis=1)
+        """Update the mean with an exponentially weighted average and soft elite weighting."""        
+        # Calculate discounted sum of costs
+        costs = jnp.sum(rollouts.costs, axis=1)
 
-        # Sort the costs and get the indices of the elites.
+        # 1. Identify Elites
         indices = jnp.argsort(costs)
         elites = indices[: self.num_elites]
+        elite_costs = costs[elites]
+        elite_knots = rollouts.knots[elites]
 
-        # The new proposal distribution is a Gaussian fit to the elites.
-        mean = jnp.mean(rollouts.knots[elites], axis=0)
-        cov = jnp.maximum(
-            jnp.std(rollouts.knots[elites], axis=0), self.sigma_min
-        )
-        return params.replace(mean=mean, cov=cov)
+        # 2. Soft-Weighting
+        shifted_costs = elite_costs - jnp.min(elite_costs)
+        
+        # Apply temperature
+        weights = jnp.exp(-self.temperature * shifted_costs)
+        weights = weights / (jnp.sum(weights) + 1e-8)  # Normalize
+        
+        # Expand weights for broadcasting over knots and actions: [num_elites, 1, 1]
+        weights_expanded = weights[:, None, None]
+
+        # 3. Compute new target mean and covariance
+        new_mean = jnp.sum(weights_expanded * elite_knots, axis=0)
+        
+        # Weighted variance: sum( w_i * (x_i - mu)^2 )
+        var = jnp.sum(weights_expanded * jnp.square(elite_knots - new_mean), axis=0)
+        new_cov = jnp.maximum(jnp.sqrt(var), self.sigma_min)
+
+        # 4. Apply Momentum 
+        updated_mean = (1.0 - self.alpha_mean) * params.mean + self.alpha_mean * new_mean
+        updated_cov = (1.0 - self.alpha_cov) * params.cov + self.alpha_cov * new_cov
+
+        return params.replace(mean=updated_mean, cov=updated_cov)
