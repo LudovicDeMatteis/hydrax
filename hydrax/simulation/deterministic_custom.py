@@ -142,6 +142,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             "ctrl": [],
             "qacc": [],
             "tau": [],
+            "ncon": [],
+            "contact_geom1": [],
+            "contact_geom2": [],
+            "contact_pos": [],
+            "contact_force": [],
+            "contact_frame": []
         }
 
     # Start the simulation
@@ -281,6 +287,35 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                     logger["ctrl"].append(np.array(mj_data.ctrl))
                     logger["qacc"].append(np.array(mj_data.qacc))
                     logger["tau"].append(np.array(mj_data.actuator_force))
+            
+                    ncon = mj_data.ncon
+                    logger["ncon"].append(ncon)
+
+                    max_contacts = 100 
+
+                    c_geom1 = np.full(max_contacts, -1, dtype=np.int32)
+                    c_geom2 = np.full(max_contacts, -1, dtype=np.int32)
+                    c_pos = np.zeros((max_contacts, 3), dtype=np.float64)
+                    c_force = np.zeros((max_contacts, 6), dtype=np.float64)
+                    c_frame = np.zeros((max_contacts, 3, 3))
+
+                    for c_idx in range(ncon):
+                        c_geom1[c_idx] = mj_data.contact[c_idx].geom1
+                        c_geom2[c_idx] = mj_data.contact[c_idx].geom2
+                        c_pos[c_idx] = mj_data.contact[c_idx].pos
+
+                        # Extract 6D contact force/torque wrench
+                        force_6d = np.zeros(6, dtype=np.float64)
+                        mujoco.mj_contactForce(mj_model, mj_data, c_idx, force_6d)
+                        c_force[c_idx] = force_6d
+                        
+                        c_frame[c_idx] = mj_data.contact[c_idx].frame.reshape(3, 3)
+
+                    logger["contact_geom1"].append(c_geom1)
+                    logger["contact_geom2"].append(c_geom2)
+                    logger["contact_pos"].append(c_pos)
+                    logger["contact_force"].append(c_force)
+                    logger["contact_frame"].append(c_frame)
 
             # Try to run in roughly realtime
             elapsed = time.time() - start_time
@@ -309,7 +344,13 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             qvel=np.array(logger["qvel"]),
             ctrl=np.array(logger["ctrl"]),
             qacc=np.array(logger["qacc"]),
-            tau=np.array(logger["tau"])
+            tau=np.array(logger["tau"]),
+            ncon=np.array(logger["ncon"]),
+            contact_geom1=np.array(logger["contact_geom1"]),
+            contact_geom2=np.array(logger["contact_geom2"]),
+            contact_pos=np.array(logger["contact_pos"]),
+            contact_force=np.array(logger["contact_force"]),
+            contact_frame=np.array(logger["contact_frame"]),
         )
         
         metrics_output_dir = os.path.join(log_path, "metrics") 
