@@ -112,6 +112,9 @@ def run_interactive(  # noqa: PLR0912, PLR0915
     num_traces = min(rollouts.controls.shape[1], max_traces)
 
     # Initialize video recording if enabled
+    video_fps = 30.0
+    video_dt = 1.0 / video_fps
+    last_video_time = mj_data.time - video_dt
     recorder = None
     if log_path:
         # Video dimensions
@@ -121,7 +124,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             output_dir=os.path.join(log_path, "videos"),
             width=width,
             height=height,
-            fps=int(1/mj_model.opt.timestep),
+            fps=int(video_fps),
         )
         # Ensure model visual offscreen buffer is compatible with video recording
         mj_model.vis.global_.offwidth = width
@@ -265,9 +268,11 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
                 # Capture frame if recording
                 if log_path and recorder.is_recording:
-                    renderer.update_scene(mj_data, cam, opt)
-                    frame = renderer.render()
-                    recorder.add_frame(frame.tobytes())
+                    if mj_data.time - last_video_time >= video_dt:
+                        renderer.update_scene(mj_data, cam, opt)
+                        frame = renderer.render()
+                        recorder.add_frame(frame.tobytes())
+                        last_video_time = mj_data.time
 
                 if log_path:
                     logger["time"].append(mj_data.time)
