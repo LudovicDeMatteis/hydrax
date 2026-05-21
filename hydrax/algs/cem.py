@@ -43,7 +43,6 @@ class CEM(SamplingBasedController):
         iterations: int = 1,
         alpha_mean: float = 0.8, 
         alpha_cov: float = 0.8, 
-        temperature: float = 1.0,
     ) -> None:
         """Initialize the controller.
 
@@ -87,7 +86,6 @@ class CEM(SamplingBasedController):
         self.num_explore = int(self.num_samples * explore_fraction)
         self.alpha_mean = alpha_mean
         self.alpha_cov = alpha_cov
-        self.temperature = temperature
 
     def init_params(
         self, initial_knots: jax.Array = None, seed: int = 0
@@ -140,37 +138,23 @@ class CEM(SamplingBasedController):
         }
         return controls, params.replace(rng=rng), metrics
 
-    def update_params(
-        self, params: CEMParams, rollouts: Trajectory
-    ) -> CEMParams:
-        """Update the mean with an exponentially weighted average and soft elite weighting."""        
-        # Calculate discounted sum of costs
+    def update_params(self, params: CEMParams, rollouts: Trajectory) -> CEMParams:
+        """Update the mean and covariance using uniform elite weighting and momentum."""        
+        # Calculate sum of costs
         costs = jnp.sum(rollouts.costs, axis=1)
 
         # 1. Identify Elites
         indices = jnp.argsort(costs)
         elites = indices[: self.num_elites]
-        elite_costs = costs[elites]
         elite_knots = rollouts.knots[elites]
 
-        # 2. Soft-Weighting
-        shifted_costs = elite_costs - jnp.min(elite_costs)
+        # 2. Compute new target mean and covariance (uniform weighting across elites)
+        new_mean = jnp.mean(elite_knots, axis=0)
         
-        # Apply temperature
-        weights = jnp.exp(-self.temperature * shifted_costs)
-        weights = weights / (jnp.sum(weights) + 1e-8)  # Normalize
-        
-        # Expand weights for broadcasting over knots and actions: [num_elites, 1, 1]
-        weights_expanded = weights[:, None, None]
+        # Standard deviation of the elites
+        new_cov = jnp.maximum(jnp.std(elite_knots, axis=0), self.sigma_min)
 
-        # 3. Compute new target mean and covariance
-        new_mean = jnp.sum(weights_expanded * elite_knots, axis=0)
-        
-        # Weighted variance: sum( w_i * (x_i - mu)^2 )
-        var = jnp.sum(weights_expanded * jnp.square(elite_knots - new_mean), axis=0)
-        new_cov = jnp.maximum(jnp.sqrt(var), self.sigma_min)
-
-        # 4. Apply Momentum 
+        # 3. Apply Momentum 
         updated_mean = (1.0 - self.alpha_mean) * params.mean + self.alpha_mean * new_mean
         updated_cov = (1.0 - self.alpha_cov) * params.cov + self.alpha_cov * new_cov
 
