@@ -3,7 +3,6 @@ import os
 import tqdm
 from typing import Sequence
 from contextlib import nullcontext
-import matplotlib.pyplot as plt
 from pathlib import Path
 
 import jax
