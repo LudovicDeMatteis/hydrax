@@ -123,8 +123,8 @@ class SamplingBasedController(ABC):
             self.randomized_axes = self.randomized_axes.tree_replace(
                 {key: 0 for key in randomizations.keys()}
             )
-
-    def optimize(self, state: mjx.Data, params: Any) -> Tuple[Any, Trajectory]:
+            
+    def optimize(self, state: mjx.Data, params: Any, ik_ctrl: jax.Array = None) -> Tuple[Any, Trajectory]:
         """Perform an optimization step to update the policy parameters.
 
         Args:
@@ -142,6 +142,8 @@ class SamplingBasedController(ABC):
             jnp.linspace(0.0, self.plan_horizon, self.num_knots) + state.time
         )
         new_mean = self.interp_func(new_tk, tk, params.mean[None, ...])[0]
+        if ik_ctrl is not None:
+            new_mean = new_mean.at[-1].set(ik_ctrl[-1])
         params = params.replace(tk=new_tk, mean=new_mean)
 
         def _optimize_scan_body(params: Any, _: Any):

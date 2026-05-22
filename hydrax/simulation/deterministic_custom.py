@@ -192,6 +192,7 @@ def run_interactive(  # noqa: PLR0912, PLR0915
 
         if hasattr(controller.task, "stop_time"):
             pbar = tqdm.tqdm(total=controller.task.stop_time)
+        is_first_iteration = True
         while True:
             if hasattr(controller.task, "stop_time"):
                 pbar.update(step_dt)
@@ -211,13 +212,15 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                 tk_new = jnp.linspace(0.0, controller.plan_horizon, controller.num_knots) + mj_data.time
                 knot_indices = np.clip(np.round(tk_new * reference_fps).astype(int), 0, len(ik_ctrl) - 1)
                 ik_mean = ik_ctrl[knot_indices]
-                policy_params = policy_params.replace(
-                    tk=jnp.array(tk_new),
-                    mean=jnp.array(ik_mean)
-                )
-
+                if is_first_iteration:
+                    is_first_iteration = False
+                    policy_params = policy_params.replace(
+                        tk=jnp.array(tk_new),
+                        mean=jnp.array(ik_mean)
+                    )
+                
             # Do a replanning step
-            policy_params, rollouts, metrics = jit_optimize(mjx_data, policy_params)
+            policy_params, rollouts, metrics = jit_optimize(mjx_data, policy_params, jnp.array(ik_mean))
             
             if log_path:   
                 # Extract scalar values from JAX arrays for logging
