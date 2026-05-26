@@ -148,6 +148,12 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             "contact_force": [],
             "contact_frame": []
         }
+        
+        mpc_logger = {
+            "time": [],
+            "init_state": [],
+            "CEM_mean": []
+        }
 
     # Start the simulation
     viewer_context = mujoco.viewer.launch_passive(mj_model, mj_data) if not headless else nullcontext()
@@ -231,7 +237,11 @@ def run_interactive(  # noqa: PLR0912, PLR0915
                         metrics_log[key] = []
                     # Extract last iteration value as float
                     metrics_log[key].append(float(val_history[-1]))
-
+                    
+                mpc_logger["time"].append(mj_data.time)
+                mpc_logger["init_state"].append(np.concatenate([mj_data.qpos, mj_data.qvel]))
+                mpc_logger["CEM_mean"].append(np.array(policy_params.mean))
+                
             # Visualize the rollouts
             if show_traces:
                 ii = 0
@@ -353,6 +363,11 @@ def run_interactive(  # noqa: PLR0912, PLR0915
             contact_pos=np.array(logger["contact_pos"]),
             contact_force=np.array(logger["contact_force"]),
             contact_frame=np.array(logger["contact_frame"]),
+        )
+        
+        np.savez_compressed(
+            os.path.join(traj_output_dir, "mpc_log.npz"),
+            **{k: np.array(v) for k, v in mpc_logger.items() if len(v) > 0}
         )
         
         metrics_output_dir = os.path.join(log_path, "metrics") 
